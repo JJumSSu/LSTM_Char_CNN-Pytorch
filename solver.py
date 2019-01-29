@@ -13,20 +13,15 @@ class Solver():
         self.batch_size = config.batch_size # Initializing Phase
         self.embed_dim  = config.embed_dim
         self.kernels    = config.kernels
-        self.out_channels = config.out_channels
+        self.channels = config.channels
         self.seq_len    = config.seq_len
         self.hidden_size  = config.hidden_size
         self.learning_rate = config.learning_rate
-        self.num_epochs = config.num_epochs
+        self.epochs = config.epochs
         self.dic = {}
-
         self.word_vocab = {}
         self.char_vocab = {}
-        self.max_len = None
-        self.data = None
-        self.idx = None
-        self.val_data = None
-        self.val_idx = None
+               
         self.word_vocab, self.char_vocab, self.max_len = get_vocab(train_data_path, valid_data_path, test_data_path)
         self.max_len = self.max_len + 2
 
@@ -37,52 +32,53 @@ class Solver():
             pickle.dump(self.dic, f)
         print("dictionary saved")
 
-        self.data, self.num_batches = corpus_to_word(train_data_path, self.batch_size)
-        self.idx = word_to_idx(self.data, self.word_vocab)
-        self.idx = self.idx.contiguous().view(self.batch_size, -1) # 20 x 46479
+        self.unique_words = len(self.word_vocab)
+
+        self.train, self.num_batches = corpus_to_word(train_data_path, self.batch_size, True)
+        self.train_idx = word_to_idx(self.train, self.word_vocab)
+        self.train_idx = self.train_idx.view(self.batch_size, -1) # 20 x 46479
         
-        self.data = word_to_char(self.data, self.char_vocab, self.max_len)
-        self.data = torch.from_numpy(self.data) 
-        self.data = self.data.contiguous().view(self.batch_size, -1, self.max_len) # 20 x 46479 x 21
-        print(self.data.size())
+        self.train = word_to_char(self.train, self.char_vocab, self.max_len)
+        self.train = torch.from_numpy(self.train) 
+        self.train = self.train.view(self.batch_size, -1, self.max_len) # 20 x 46479 x 21
 
-        self.val_data, _ = corpus_to_word(valid_data_path, self.batch_size)
-        self.val_idx = word_to_idx(self.val_data, self.word_vocab)
-        self.val_idx = self.val_idx.contiguous().view(self.batch_size, -1)
+        self.valid, _ = corpus_to_word(valid_data_path, self.batch_size, False)
+        self.valid_idx = word_to_idx(self.valid, self.word_vocab)
+        self.valid_idx = self.valid_idx.view(self.batch_size, -1)
 
-        self.val_data = word_to_char(self.val_data, self.char_vocab, self.max_len)
-        self.val_data = torch.from_numpy(self.val_data)
-        self.val_data = self.val_data.view(self.batch_size, -1, self.max_len)
+        self.valid = word_to_char(self.valid, self.char_vocab, self.max_len)
+        self.valid = torch.from_numpy(self.valid)
+        self.valid = self.valid.view(self.batch_size, -1, self.max_len)
 
 
-    def _validate(self, seq_len, val_data, val_label, model, h, criterion):
+    def _validate(self, seq_len, valid, valid_idx, model, h, criterion):
                 
         val_loss = 0
-        i = 0
+        step = 0
         
-        for j in range(0, val_data.size(1)-seq_len, seq_len):
+        for j in range(0, valid.size(1)-seq_len, seq_len):
 
-            val_inputs = val_data[:,j:j+seq_len,:].cuda()
-            val_targets = val_label[:,(j+1):(j+1)+seq_len].cuda().contiguous().view(-1)
+            val_input = valid[:, j : j+seq_len, :].cuda()
+            val_true = valid_idx[:, (j+1) : (j+1)+seq_len].cuda().view(-1)
 
-            output, h = model(val_inputs, h)
-            loss = criterion(output, val_targets)
+            y, _ = model(val_input, h)
+            loss = criterion(y, val_true)
             val_loss += loss.item()
-            i += 1
+            step += 1
 
             model.zero_grad()
         
-        print ('Valid Loss: %.3f, Perplexity: %5.2f' %
-                (val_loss/i, np.exp(val_loss/i)))
+        print ('Validation Loss: %.3f, Perplexity: %5.2f' % (val_loss/step, np.exp(val_loss/step)))
         
-        return val_loss/i
+        return val_loss/step
 
-    def train(self):
 
-        best_score = 10000
-        pivot = 10000
+    def train_(self):
 
-        model = LM(self.word_vocab, self.char_vocab, self.max_len, self.embed_dim, self.out_channels, self.kernels, self.hidden_size)
+
+        cur_best = 10000
+
+        model = LM(self.unique_words, self.char_vocab, self.max_len, self.embed_dim, self.channels, self.kernels, self.hidden_size)
 
         if torch.cuda.is_available():
             model.cuda()
@@ -91,22 +87,27 @@ class Solver():
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
-        for epoch in range(self.num_epochs):
-
-            hidden_state = torch.zeros(2, self.batch_size, self.hidden_size).cuda(), torch.zeros(2,self.batch_size, self.hidden_size).cuda()
+        for epoch in range(self.epochs):
 
             model.train(True)
 
-            for i in range(0, self.data.size(1)-self.seq_len, self.seq_len):
+            hidden_state = [torch.zeros(2, self.batch_size, self.hidden_size).cuda()] * 2 ########
+
+            for i in range(0, self.train.size(1)-self.seq_len, self.seq_len):
 
                 model.zero_grad()
 
-                inputs = self.data[:,i:i+self.seq_len,:].cuda() # 20 * 35 * 21
-                targets = self.idx[:,(i+1):(i+1)+self.seq_len].cuda().contiguous() # 20 * 35
-                               
-                hidden_state = [state.detach() for state in hidden_state]
+                inputs = self.train[:, i : i + self.seq_len,:].cuda() # 20 * 35 * 21
+                targets = self.train_idx[:, (i+1) : (i+1) + self.seq_len].cuda() # 20 * 35
+
+                temp = []           
+
+                for state in hidden_state:
+                    temp.append(state.detach())
                 
-                output, hidden_state = model(inputs,hidden_state) # initialize?
+                hidden_state = temp
+
+                output, hidden_state = model(inputs, hidden_state) # initialize?
                 
                 loss = criterion(output, targets.view(-1))
                         
@@ -119,25 +120,24 @@ class Solver():
                 step = (i+1) // self.seq_len                    
             
                 if step % 100 == 0:        
-                    print ('Epoch [%d/%d], Step[%d/%d], Loss: %.3f, Perplexity: %5.2f' %
-                        (epoch+1, self.num_epochs, step, self.num_batches//self.seq_len,
-                        loss.item(), np.exp(loss.item())))
+                    print ('Epoch %d/%d, Batch x Seq_Len %d/%d, Loss: %.3f, Perplexity: %5.2f' % (epoch, self.epochs, step, self.num_batches//self.seq_len, loss.item(), np.exp(loss.item())))
             
             model.eval() 
-            val_loss = self._validate(self.seq_len, self.val_data, self.val_idx, model, hidden_state, criterion)
-            val_loss = np.exp(val_loss)
+            val_loss = self._validate(self.seq_len, self.valid, self.valid_idx, model, hidden_state, criterion)
+            val_perplex = np.exp(val_loss)
                         
-            if pivot-val_loss < 0.8 : # pivot?
+            if cur_best-val_perplex < 1 : # pivot?
             
                 if learning_rate > 0.03: 
-                    learning_rate = learning_rate * 0.3
+                    learning_rate = learning_rate * 0.5
                     print("Adjusted learning_rate : %.5f"%learning_rate)
                     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-
-            pivot = val_loss
-
-            if val_loss < best_score:
-                print("The best val loss: ", val_loss)
-                best_score = val_loss
+                
+                else:
+                    pass
+            
+            if val_perplex < cur_best:
+                print("The current best val loss: ", val_loss)
+                cur_best = val_perplex
                 torch.save(model.state_dict(), 'model.pkl')
 
