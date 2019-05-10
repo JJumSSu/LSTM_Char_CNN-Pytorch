@@ -4,7 +4,8 @@
 Implementation of the paper ***Character-Aware Neural Language Models*** (AAAI 2016) by using pytorch.
 
 
-Training 
+## Training 
 
-```python train.py ```
+
+```python python main.py ```
 
