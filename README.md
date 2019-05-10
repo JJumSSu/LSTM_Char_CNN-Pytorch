@@ -1,6 +1,10 @@
 # CharLM-Pytorch
 
 
-Implementation of the paper "Character-Aware Neural Language Models" (AAAI 2016) by using pytorch.
+Implementation of the paper ***Character-Aware Neural Language Models*** (AAAI 2016) by using pytorch.
 
+
+Training 
+
+```python train.py ```
 
