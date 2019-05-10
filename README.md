@@ -7,5 +7,10 @@ Implementation of the paper ***Character-Aware Neural Language Models*** (AAAI 2
 ## Training 
 
 
-```python python main.py ```
+```python main.py ```
 
+
+## Configuration
+
+
+You can change the configurations from "config.py".
